@@ -1,0 +1,2 @@
+/usr/bin/ar qc libvdb.a CMakeFiles/vdb.dir/src/dataset.cpp.o CMakeFiles/vdb.dir/src/distance.cpp.o CMakeFiles/vdb.dir/src/index.cpp.o CMakeFiles/vdb.dir/src/ivf.cpp.o CMakeFiles/vdb.dir/src/hnsw.cpp.o CMakeFiles/vdb.dir/src/utils.cpp.o CMakeFiles/vdb.dir/src/io.cpp.o CMakeFiles/vdb.dir/src/gpu_stub.cpp.o
+/usr/bin/ranlib libvdb.a

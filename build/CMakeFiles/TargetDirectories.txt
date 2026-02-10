@@ -1,0 +1,5 @@
+/Users/yoshio/Desktop/vector_db/build/CMakeFiles/vdb.dir
+/Users/yoshio/Desktop/vector_db/build/CMakeFiles/vdb_demo.dir
+/Users/yoshio/Desktop/vector_db/build/CMakeFiles/vdb_cli.dir
+/Users/yoshio/Desktop/vector_db/build/CMakeFiles/edit_cache.dir
+/Users/yoshio/Desktop/vector_db/build/CMakeFiles/rebuild_cache.dir
