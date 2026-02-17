@@ -5,8 +5,13 @@
 #include "vdb/utils.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <random>
+
+#ifdef VDB_USE_OPENMP
+#include <omp.h>
+#endif
 
 namespace vdb {
 
@@ -53,8 +58,12 @@ void IvfIndex::search(const Dataset& queries, std::size_t k, SearchResult& out,
     nprobe = cfg_.nlist;
   }
 
-  for (std::size_t qi = 0; qi < queries.count(); ++qi) {
-    const float* q = queries.at(qi);
+#ifdef VDB_USE_OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+  for (std::int64_t qi = 0; qi < static_cast<std::int64_t>(queries.count()); ++qi) {
+    const std::size_t qidx = static_cast<std::size_t>(qi);
+    const float* q = queries.at(qidx);
     std::vector<Neighbor> centroid_dists;
     centroid_dists.reserve(cfg_.nlist);
     for (std::size_t c = 0; c < cfg_.nlist; ++c) {
@@ -74,7 +83,7 @@ void IvfIndex::search(const Dataset& queries, std::size_t k, SearchResult& out,
 
     std::vector<Neighbor> topk = select_topk(candidates, k);
     for (std::size_t i = 0; i < k; ++i) {
-      std::size_t out_idx = qi * k + i;
+      std::size_t out_idx = static_cast<std::size_t>(qi) * k + i;
       if (i < topk.size()) {
         out.indices[out_idx] = topk[i].id;
         out.distances[out_idx] = topk[i].dist;

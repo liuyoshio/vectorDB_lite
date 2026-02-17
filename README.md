@@ -1,46 +1,127 @@
 # vector_db
 
-Lightweight vector database with IVF and HNSW indexing, static build, and batched query search.
+Lightweight vector database for similarity search with:
+- `IVF` index mode
+- `HNSW` index mode
+- Static index construction
+- Batched query search
 
-## Build (CPU)
+## Project layout
+
+- `src/` core implementation + CLI
+- `include/vdb/` public headers
+- `benchmarks/` benchmark + plotting scripts
+- `demo.sh` quick demo runner
+- `PRESENTATION_CONTENT.md` presentation draft content
+
+## Prerequisites
+
+- CMake >= 3.18
+- C++17 compiler
+- Python 3 (for data generation and benchmarks)
+
+Optional for benchmarking:
+- `numpy` (required for benchmark script)
+- `matplotlib` (for benchmark plots)
+- `faiss-cpu` or `faiss-gpu` (for FAISS comparison)
+
+## Quick start
+
+### 1) Build (CPU)
 
 ```bash
 cmake -S . -B build
 cmake --build build
 ```
 
-## Build (CUDA)
+### 2) Generate sample data
 
 ```bash
-cmake -S . -B build -DVDB_ENABLE_CUDA=ON
-cmake --build build
+python3 mock_data.py
 ```
 
-## CLI usage
+This creates:
+- `data.bin`
+- `queries.bin`
+
+Binary format:
+
+```text
+[uint32 count][uint32 dim][count*dim float32 values] (row-major)
+```
+
+### 3) Run search
 
 ```bash
-./build/vdb_cli search --index ivf --data data.bin --queries queries.bin --k 10 --nprobe 8
+./build/vdb_cli search --index ivf  --data data.bin --queries queries.bin --k 10 --nprobe 8
 ./build/vdb_cli search --index hnsw --data data.bin --queries queries.bin --k 10 --ef-search 64
 ```
 
-Write results as CSV (qi,rank,id,dist):
+Write output as CSV:
 
 ```bash
 ./build/vdb_cli search --index ivf --data data.bin --queries queries.bin --k 10 --out results.csv
 ```
 
-### Binary format
+### 4) Run full demo script
 
-Both `--data` and `--queries` use the same simple binary format:
-
-```
-[uint32 count][uint32 dim][count*dim float32 values]  (row-major)
+```bash
+bash demo.sh
 ```
 
-## API overview
+## Benchmarking
 
-- `vdb::IvfIndex` with `IvfConfig` for `nlist` and `kmeans_iters`.
-- `vdb::HnswIndex` with `HnswConfig` for `M`, `ef_construction`, `ef_search`.
-- `vdb::SearchParams` for `nprobe`, `ef_search`, `use_gpu`.
+Run the benchmark pipeline (Debug + Release, VDB + optional FAISS):
 
-See `src/main.cpp` for a complete minimal example.
+```bash
+bash benchmarks/run_bench.sh
+```
+
+Or run manually:
+
+```bash
+python3 benchmarks/benchmark.py \
+  --root . \
+  --n 20000 --dim 64 --nq 200 --k 10 \
+  --runs 3 --threads 8 \
+  --ivf-nlist 256 --ivf-nprobe 8 \
+  --hnsw-m 16 --hnsw-ef-search 64 \
+  --output benchmarks/results.json
+```
+
+Outputs:
+- `benchmarks/results.json`
+- `benchmarks/qps_search_comparison.png` (if matplotlib installed)
+- `benchmarks/recall_comparison.png` (if matplotlib installed)
+- `benchmarks/optimization_speedup.png` (if matplotlib installed)
+
+## OpenMP notes (threaded query parallelism)
+
+`--threads` is active only when OpenMP is found at configure time.
+
+On macOS, if OpenMP is not detected by default, use Homebrew LLVM + libomp:
+
+```bash
+brew install llvm libomp
+
+cmake -S . -B build_release \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang" \
+  -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++" \
+  -DOpenMP_ROOT="$(brew --prefix libomp)"
+
+cmake --build build_release -j
+```
+
+## CLI summary
+
+```bash
+vdb_cli search --index ivf|hnsw --data <data.bin> --queries <queries.bin> --k <K> [options]
+vdb_cli bench  --index ivf|hnsw --data <data.bin> --queries <queries.bin> --k <K> [options]
+```
+
+Common options:
+- `--threads N`
+- `--nlist`, `--nprobe`, `--kmeans-iters` (IVF)
+- `--M`, `--ef-construction`, `--ef-search` (HNSW)
+- `--out <path>`

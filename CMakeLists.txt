@@ -6,6 +6,8 @@ option(VDB_ENABLE_CUDA "Enable CUDA acceleration" OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(OpenMP)
+
 add_library(vdb
   src/dataset.cpp
   src/distance.cpp
@@ -17,6 +19,11 @@ add_library(vdb
 )
 
 target_include_directories(vdb PUBLIC include)
+
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(vdb PUBLIC OpenMP::OpenMP_CXX)
+  target_compile_definitions(vdb PUBLIC VDB_USE_OPENMP)
+endif()
 
 if(VDB_ENABLE_CUDA)
   enable_language(CUDA)

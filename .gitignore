@@ -1,0 +1,26 @@
+# Build artifacts
+build/
+build_debug/
+build_release/
+cmake-build-*/
+
+# Binaries and intermediates
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.exe
+
+# Local demo/benchmark data
+*.bin
+benchmarks/*.bin
+benchmarks/results*.json
+benchmarks/*.png
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS/editor
+.DS_Store

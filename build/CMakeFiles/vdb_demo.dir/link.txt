@@ -1,1 +1,0 @@
-/usr/bin/c++ -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/vdb_demo.dir/src/main.cpp.o -o vdb_demo  libvdb.a

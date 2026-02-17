@@ -1,10 +1,15 @@
 #include "vdb/hnsw.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <limits>
 #include <queue>
 #include <unordered_set>
+
+#ifdef VDB_USE_OPENMP
+#include <omp.h>
+#endif
 
 #include "vdb/distance.hpp"
 #include "vdb/gpu.hpp"
@@ -226,25 +231,29 @@ void HnswIndex::search(const Dataset& queries, std::size_t k, SearchResult& out,
 
   std::size_t ef = params.ef_search ? params.ef_search : cfg_.ef_search;
 
-  for (std::size_t qi = 0; qi < queries.count(); ++qi) {
+#ifdef VDB_USE_OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+  for (std::int64_t qi = 0; qi < static_cast<std::int64_t>(queries.count()); ++qi) {
+    const std::size_t qidx = static_cast<std::size_t>(qi);
     IndexId ep = static_cast<IndexId>(enterpoint_);
     for (int l = max_level_; l > 0; --l) {
-      auto candidates = search_layer(queries.at(qi), ep, l, 1);
+      auto candidates = search_layer(queries.at(qidx), ep, l, 1);
       if (!candidates.empty()) {
         ep = candidates.front();
       }
     }
 
-    auto candidates = search_layer(queries.at(qi), ep, 0, ef);
+    auto candidates = search_layer(queries.at(qidx), ep, 0, ef);
     std::vector<Neighbor> tmp;
     tmp.reserve(candidates.size());
     for (IndexId id : candidates) {
-      tmp.push_back({id, distance_to(id, queries.at(qi))});
+      tmp.push_back({id, distance_to(id, queries.at(qidx))});
     }
     auto top = select_topk(tmp, k);
 
     for (std::size_t j = 0; j < k; ++j) {
-      std::size_t out_idx = qi * k + j;
+      std::size_t out_idx = qidx * k + j;
       if (j < top.size()) {
         out.indices[out_idx] = top[j].id;
         out.distances[out_idx] = top[j].dist;
