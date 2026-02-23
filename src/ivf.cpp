@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <utility>
 
 #ifdef VDB_USE_OPENMP
 #include <omp.h>
@@ -16,6 +17,41 @@
 namespace vdb {
 
 IvfIndex::IvfIndex(IvfConfig cfg) : cfg_(cfg) {}
+
+IvfIndex::~IvfIndex() {
+#ifdef VDB_USE_CUDA
+  if (gpu_ctx_) {
+    gpu_ivf_free(static_cast<GpuIvfContext*>(gpu_ctx_));
+    gpu_ctx_ = nullptr;
+  }
+#endif
+}
+
+IvfIndex::IvfIndex(IvfIndex&& other) noexcept
+    : cfg_(other.cfg_),
+      data_(std::move(other.data_)),
+      centroids_(std::move(other.centroids_)),
+      lists_(std::move(other.lists_)),
+      gpu_ctx_(other.gpu_ctx_) {
+  other.gpu_ctx_ = nullptr;
+}
+
+IvfIndex& IvfIndex::operator=(IvfIndex&& other) noexcept {
+  if (this != &other) {
+#ifdef VDB_USE_CUDA
+    if (gpu_ctx_) {
+      gpu_ivf_free(static_cast<GpuIvfContext*>(gpu_ctx_));
+    }
+#endif
+    cfg_ = other.cfg_;
+    data_ = std::move(other.data_);
+    centroids_ = std::move(other.centroids_);
+    lists_ = std::move(other.lists_);
+    gpu_ctx_ = other.gpu_ctx_;
+    other.gpu_ctx_ = nullptr;
+  }
+  return *this;
+}
 
 void IvfIndex::build(const Dataset& data) {
   data_ = data;
@@ -30,12 +66,34 @@ void IvfIndex::build(const Dataset& data) {
   if (cfg_.nlist > data_.count()) {
     cfg_.nlist = data_.count();
   }
+
+#ifdef VDB_USE_CUDA
+  if (gpu_ctx_) {
+    gpu_ivf_free(static_cast<GpuIvfContext*>(gpu_ctx_));
+    gpu_ctx_ = nullptr;
+  }
+
+  // GPU k-means training + inverted list construction
+  centroids_ = Dataset(cfg_.nlist, data_.dim());
+  std::vector<IndexId> assignments(data_.count());
+
+  gpu_ctx_ = gpu_ivf_build(data_.data(), data_.count(), data_.dim(),
+                           cfg_.nlist, cfg_.kmeans_iters,
+                           centroids_.data(), assignments.data());
+
+  // Also build CPU-side inverted lists (needed for non-GPU search fallback)
+  lists_.assign(cfg_.nlist, {});
+  for (std::size_t i = 0; i < data_.count(); ++i) {
+    lists_[assignments[i]].push_back(static_cast<IndexId>(i));
+  }
+#else
   train_kmeans(data_);
   lists_.assign(cfg_.nlist, {});
   for (std::size_t i = 0; i < data_.count(); ++i) {
     std::size_t c = nearest_centroid(data_.at(i));
     lists_[c].push_back(static_cast<IndexId>(i));
   }
+#endif
 }
 
 void IvfIndex::search(const Dataset& queries, std::size_t k, SearchResult& out,
@@ -45,10 +103,11 @@ void IvfIndex::search(const Dataset& queries, std::size_t k, SearchResult& out,
     return;
   }
 #ifdef VDB_USE_CUDA
-  if (params.use_gpu) {
-    gpu_knn_l2(data_.data(), data_.count(), data_.dim(),
-               queries.data(), queries.count(), k,
-               out.indices.data(), out.distances.data());
+  if (params.use_gpu && gpu_ctx_) {
+    std::size_t nprobe = params.nprobe > 0 ? params.nprobe : 1;
+    gpu_ivf_search(static_cast<const GpuIvfContext*>(gpu_ctx_),
+                   queries.data(), queries.count(), k, nprobe,
+                   out.indices.data(), out.distances.data());
     return;
   }
 #endif

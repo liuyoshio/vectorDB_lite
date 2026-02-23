@@ -20,6 +20,10 @@ Lightweight vector database for similarity search with:
 - C++17 compiler
 - Python 3 (for data generation and benchmarks)
 
+Optional for GPU acceleration:
+- CUDA toolkit >= 12.0
+- NVIDIA GPU (default target: sm_89 / RTX 4090)
+
 Optional for benchmarking:
 - `numpy` (required for benchmark script)
 - `matplotlib` (for benchmark plots)
@@ -27,12 +31,24 @@ Optional for benchmarking:
 
 ## Quick start
 
-### 1) Build (CPU)
+### 1a) Build (CPU)
 
 ```bash
 cmake -S . -B build
 cmake --build build
 ```
+
+### 1b) Build (GPU — requires CUDA toolkit and NVIDIA GPU)
+
+```bash
+cmake -S . -B build_gpu \
+  -DVDB_ENABLE_CUDA=ON \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build_gpu
+```
+
+The default CUDA architecture is `sm_89` (RTX 4090 / Ada Lovelace).
+Override with `-DCMAKE_CUDA_ARCHITECTURES=<arch>` for other GPUs.
 
 ### 2) Generate sample data
 
@@ -68,6 +84,16 @@ Write output as CSV:
 ```bash
 bash demo.sh
 ```
+
+### 5) Run GPU-accelerated search
+
+```bash
+./build_gpu/vdb_cli search --index ivf --data data.bin --queries queries.bin --k 10 --nprobe 8 --use-gpu
+```
+
+When built with `VDB_ENABLE_CUDA=ON`, `--use-gpu` enables:
+- **GPU IVF search** — centroid distance computation, probe selection, and per-list search all on GPU with persistent device memory
+- **GPU k-means build** — index construction runs on GPU automatically
 
 ## Benchmarking
 
@@ -124,4 +150,5 @@ Common options:
 - `--threads N`
 - `--nlist`, `--nprobe`, `--kmeans-iters` (IVF)
 - `--M`, `--ef-construction`, `--ef-search` (HNSW)
+- `--use-gpu` (CUDA builds only — GPU-accelerated IVF search)
 - `--out <path>`

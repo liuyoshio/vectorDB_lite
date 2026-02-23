@@ -17,6 +17,12 @@ struct IvfConfig {
 class IvfIndex : public Index {
 public:
   explicit IvfIndex(IvfConfig cfg = {});
+  ~IvfIndex();
+
+  IvfIndex(const IvfIndex&) = delete;
+  IvfIndex& operator=(const IvfIndex&) = delete;
+  IvfIndex(IvfIndex&& other) noexcept;
+  IvfIndex& operator=(IvfIndex&& other) noexcept;
 
   void build(const Dataset& data) override;
   void search(const Dataset& queries, std::size_t k, SearchResult& out,
@@ -29,6 +35,7 @@ private:
   Dataset data_;
   Dataset centroids_;
   std::vector<std::vector<IndexId>> lists_;
+  void* gpu_ctx_ = nullptr;
 
   void train_kmeans(const Dataset& data);
   std::size_t nearest_centroid(const float* vec) const;

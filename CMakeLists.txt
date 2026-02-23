@@ -26,10 +26,15 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 if(VDB_ENABLE_CUDA)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 89)
+  endif()
   enable_language(CUDA)
   target_compile_definitions(vdb PUBLIC VDB_USE_CUDA)
   target_sources(vdb PRIVATE src/gpu.cu)
-  set_target_properties(vdb PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  set_target_properties(vdb PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_ARCHITECTURES 89)
 else()
   target_sources(vdb PRIVATE src/gpu_stub.cpp)
 endif()
