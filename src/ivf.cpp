@@ -19,9 +19,14 @@ IvfIndex::IvfIndex(IvfConfig cfg) : cfg_(cfg) {}
 
 void IvfIndex::build(const Dataset& data) {
   data_ = data;
+  centroid_norms_sq_.clear();
+  clustered_data_ = Dataset();
+  data_norms_sq_.clear();
+  list_offsets_.clear();
+  list_ids_.clear();
+
   if (data_.count() == 0) {
     centroids_ = Dataset();
-    lists_.clear();
     return;
   }
   if (cfg_.nlist == 0) {
@@ -30,11 +35,42 @@ void IvfIndex::build(const Dataset& data) {
   if (cfg_.nlist > data_.count()) {
     cfg_.nlist = data_.count();
   }
+
   train_kmeans(data_);
-  lists_.assign(cfg_.nlist, {});
+
+  // Precompute centroid norms (needed for nearest_centroid in assignment)
+  centroid_norms_sq_.resize(cfg_.nlist);
+  for (std::size_t c = 0; c < cfg_.nlist; ++c) {
+    centroid_norms_sq_[c] = l2_norm_sq(centroids_.at(c), data_.dim());
+  }
+
+  // Assign vectors to clusters
+  list_ids_.assign(cfg_.nlist, {});
   for (std::size_t i = 0; i < data_.count(); ++i) {
     std::size_t c = nearest_centroid(data_.at(i));
-    lists_[c].push_back(static_cast<IndexId>(i));
+    list_ids_[c].push_back(static_cast<IndexId>(i));
+  }
+
+  // Build clustered storage: vectors contiguous per cluster
+  list_offsets_.resize(cfg_.nlist + 1);
+  list_offsets_[0] = 0;
+  for (std::size_t c = 0; c < cfg_.nlist; ++c) {
+    list_offsets_[c + 1] = list_offsets_[c] + list_ids_[c].size();
+  }
+  std::size_t total = list_offsets_[cfg_.nlist];
+  clustered_data_ = Dataset(total, data_.dim());
+  data_norms_sq_.resize(total);
+
+  std::size_t dim = data_.dim();
+  for (std::size_t c = 0; c < cfg_.nlist; ++c) {
+    std::size_t base = list_offsets_[c];
+    const auto& ids = list_ids_[c];
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+      const float* src = data_.at(ids[i]);
+      float* dst = clustered_data_.at(base + i);
+      std::copy(src, src + dim, dst);
+      data_norms_sq_[base + i] = l2_norm_sq(dst, dim);
+    }
   }
 }
 
@@ -58,38 +94,55 @@ void IvfIndex::search(const Dataset& queries, std::size_t k, SearchResult& out,
     nprobe = cfg_.nlist;
   }
 
+  std::size_t dim = clustered_data_.dim();
+
 #ifdef VDB_USE_OPENMP
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel
 #endif
-  for (std::int64_t qi = 0; qi < static_cast<std::int64_t>(queries.count()); ++qi) {
-    const std::size_t qidx = static_cast<std::size_t>(qi);
-    const float* q = queries.at(qidx);
+  {
     std::vector<Neighbor> centroid_dists;
     centroid_dists.reserve(cfg_.nlist);
-    for (std::size_t c = 0; c < cfg_.nlist; ++c) {
-      float d = l2_distance(centroids_.at(c), q, data_.dim());
-      centroid_dists.push_back({static_cast<IndexId>(c), d});
-    }
-    std::vector<Neighbor> probes = select_topk(centroid_dists, nprobe);
-
     std::vector<Neighbor> candidates;
-    for (const auto& p : probes) {
-      const auto& list = lists_[p.id];
-      for (IndexId id : list) {
-        float d = l2_distance(data_.at(id), q, data_.dim());
-        candidates.push_back({id, d});
-      }
-    }
 
-    std::vector<Neighbor> topk = select_topk(candidates, k);
-    for (std::size_t i = 0; i < k; ++i) {
-      std::size_t out_idx = static_cast<std::size_t>(qi) * k + i;
-      if (i < topk.size()) {
-        out.indices[out_idx] = topk[i].id;
-        out.distances[out_idx] = topk[i].dist;
-      } else {
-        out.indices[out_idx] = 0;
-        out.distances[out_idx] = std::numeric_limits<float>::infinity();
+#ifdef VDB_USE_OPENMP
+#pragma omp for schedule(dynamic)
+#endif
+    for (std::int64_t qi = 0; qi < static_cast<std::int64_t>(queries.count()); ++qi) {
+      const std::size_t qidx = static_cast<std::size_t>(qi);
+      const float* q = queries.at(qidx);
+      float q_norm_sq = l2_norm_sq(q, dim);
+
+      // Centroid distances via dot-product form: ||c-q||^2 = ||c||^2 + ||q||^2 - 2*<c,q>
+      centroid_dists.clear();
+      for (std::size_t c = 0; c < cfg_.nlist; ++c) {
+        float dot_cq = dot_product(centroids_.at(c), q, dim);
+        float d = l2_sq_from_norms(centroid_norms_sq_[c], q_norm_sq, dot_cq);
+        centroid_dists.push_back({static_cast<IndexId>(c), d});
+      }
+      std::vector<Neighbor> probes = select_topk(centroid_dists, nprobe);
+
+      // Candidate distances from clustered storage (contiguous per list)
+      candidates.clear();
+      for (const auto& p : probes) {
+        std::size_t start = list_offsets_[p.id];
+        std::size_t end = list_offsets_[p.id + 1];
+        for (std::size_t j = start; j < end; ++j) {
+          float dot_vq = dot_product(clustered_data_.at(j), q, dim);
+          float d = l2_sq_from_norms(data_norms_sq_[j], q_norm_sq, dot_vq);
+          candidates.push_back({list_ids_[p.id][j - start], d});
+        }
+      }
+
+      std::vector<Neighbor> topk = select_topk(candidates, k);
+      for (std::size_t i = 0; i < k; ++i) {
+        std::size_t out_idx = qidx * k + i;
+        if (i < topk.size()) {
+          out.indices[out_idx] = topk[i].id;
+          out.distances[out_idx] = topk[i].dist;
+        } else {
+          out.indices[out_idx] = 0;
+          out.distances[out_idx] = std::numeric_limits<float>::infinity();
+        }
       }
     }
   }
@@ -143,12 +196,30 @@ void IvfIndex::train_kmeans(const Dataset& data) {
 
 std::size_t IvfIndex::nearest_centroid(const float* vec) const {
   std::size_t best = 0;
-  float best_dist = l2_distance(centroids_.at(0), vec, data_.dim());
-  for (std::size_t c = 1; c < cfg_.nlist; ++c) {
-    float d = l2_distance(centroids_.at(c), vec, data_.dim());
-    if (d < best_dist) {
-      best_dist = d;
-      best = c;
+  float best_dist;
+
+  if (centroid_norms_sq_.size() == cfg_.nlist) {
+    // Use dot-product form when norms are precomputed (after build, during assignment)
+    float vec_norm_sq = l2_norm_sq(vec, data_.dim());
+    float dot0 = dot_product(centroids_.at(0), vec, data_.dim());
+    best_dist = l2_sq_from_norms(centroid_norms_sq_[0], vec_norm_sq, dot0);
+    for (std::size_t c = 1; c < cfg_.nlist; ++c) {
+      float dot_c = dot_product(centroids_.at(c), vec, data_.dim());
+      float d = l2_sq_from_norms(centroid_norms_sq_[c], vec_norm_sq, dot_c);
+      if (d < best_dist) {
+        best_dist = d;
+        best = c;
+      }
+    }
+  } else {
+    // Fallback during train_kmeans (centroid_norms_sq_ not yet computed)
+    best_dist = l2_distance(centroids_.at(0), vec, data_.dim());
+    for (std::size_t c = 1; c < cfg_.nlist; ++c) {
+      float d = l2_distance(centroids_.at(c), vec, data_.dim());
+      if (d < best_dist) {
+        best_dist = d;
+        best = c;
+      }
     }
   }
   return best;
