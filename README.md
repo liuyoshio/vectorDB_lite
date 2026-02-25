@@ -50,6 +50,9 @@ cmake --build build_gpu
 The default CUDA architecture is `sm_89` (RTX 4090 / Ada Lovelace).
 Override with `-DCMAKE_CUDA_ARCHITECTURES=<arch>` for other GPUs.
 
+When built with CUDA, the CLI auto-detects a CUDA device and falls back to CPU if none is found.
+Use `--no-gpu` to force CPU.
+
 ### 2) Generate sample data
 
 ```bash
@@ -88,12 +91,11 @@ bash demo.sh
 ### 5) Run GPU-accelerated search
 
 ```bash
-./build_gpu/vdb_cli search --index ivf --data data.bin --queries queries.bin --k 10 --nprobe 8 --use-gpu
+./build_gpu/vdb_cli search --index ivf --data data.bin --queries queries.bin --k 10 --nprobe 8
 ```
 
-When built with `VDB_ENABLE_CUDA=ON`, `--use-gpu` enables:
-- **GPU IVF search** — centroid distance computation, probe selection, and per-list search all on GPU with persistent device memory
-- **GPU k-means build** — index construction runs on GPU automatically
+When built with `VDB_ENABLE_CUDA=ON`, the CLI will automatically enable GPU when available.
+Use `--use-gpu` to force GPU or `--no-gpu` to force CPU.
 
 ## Benchmarking
 
@@ -112,6 +114,7 @@ python3 benchmarks/benchmark.py \
   --runs 3 --threads 8 \
   --ivf-nlist 256 --ivf-nprobe 8 \
   --hnsw-m 16 --hnsw-ef-search 64 \
+  --cuda --cuda-arch 89 --gpu-mode auto \
   --output benchmarks/results.json
 ```
 
@@ -150,5 +153,5 @@ Common options:
 - `--threads N`
 - `--nlist`, `--nprobe`, `--kmeans-iters` (IVF)
 - `--M`, `--ef-construction`, `--ef-search` (HNSW)
-- `--use-gpu` (CUDA builds only — GPU-accelerated IVF search)
+- `--use-gpu`, `--auto-gpu`, `--no-gpu` (CUDA builds only — auto-detect by default)
 - `--out <path>`

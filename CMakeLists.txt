@@ -34,7 +34,7 @@ if(VDB_ENABLE_CUDA)
   target_sources(vdb PRIVATE src/gpu.cu)
   set_target_properties(vdb PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
-    CUDA_ARCHITECTURES 89)
+    CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
 else()
   target_sources(vdb PRIVATE src/gpu_stub.cpp)
 endif()

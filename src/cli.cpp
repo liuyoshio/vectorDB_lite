@@ -2,6 +2,7 @@
 #include "vdb/io.hpp"
 #include "vdb/ivf.hpp"
 #include "vdb/types.hpp"
+#include "vdb/gpu.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -25,7 +26,9 @@ void print_usage() {
       << "\n"
       << "Options:\n"
       << "  --out PATH              Write results as CSV (qi,rank,id,dist)\n"
-      << "  --use-gpu               Enable GPU brute-force search (if built with CUDA)\n"
+      << "  --use-gpu               Force GPU search (CUDA builds only)\n"
+      << "  --no-gpu                Force CPU search\n"
+      << "  --auto-gpu              Auto-detect GPU (default when CUDA is enabled)\n"
       << "  --nlist N               IVF number of lists (default 1024)\n"
       << "  --kmeans-iters N        IVF kmeans iterations (default 20)\n"
       << "  --nprobe N              IVF probes (default 8)\n"
@@ -100,6 +103,44 @@ bool parse_common_required(const std::vector<std::string>& args, const char*& in
   return true;
 }
 
+bool resolve_use_gpu(const std::vector<std::string>& args) {
+  bool force_on = has_flag(args, "--use-gpu");
+  bool force_off = has_flag(args, "--no-gpu");
+  bool auto_flag = has_flag(args, "--auto-gpu");
+
+  if (force_on && force_off) {
+    std::cerr << "warning: both --use-gpu and --no-gpu set; using CPU\n";
+    return false;
+  }
+
+  if (force_off) {
+    return false;
+  }
+
+#ifdef VDB_USE_CUDA
+  bool available = vdb::gpu_available();
+  if (force_on && !available) {
+    std::cerr << "warning: GPU requested but no CUDA device found; falling back to CPU\n";
+    return false;
+  }
+  if (force_on) {
+    return true;
+  }
+  if (auto_flag || !force_on) {
+    if (!available) {
+      std::cerr << "info: no CUDA device detected; using CPU\n";
+    }
+    return available;
+  }
+  return false;
+#else
+  if (force_on || auto_flag) {
+    std::cerr << "warning: GPU flags ignored because this build has no CUDA support\n";
+  }
+  return false;
+#endif
+}
+
 int run_search_command(const std::vector<std::string>& args) {
   const char* index_name = nullptr;
   const char* data_path = nullptr;
@@ -120,7 +161,7 @@ int run_search_command(const std::vector<std::string>& args) {
   }
 
   vdb::SearchParams params;
-  params.use_gpu = has_flag(args, "--use-gpu");
+  params.use_gpu = resolve_use_gpu(args);
 
   std::string idx(index_name);
   vdb::SearchResult result;
@@ -187,7 +228,7 @@ int run_bench_command(const std::vector<std::string>& args) {
   }
 
   vdb::SearchParams params;
-  params.use_gpu = has_flag(args, "--use-gpu");
+  params.use_gpu = resolve_use_gpu(args);
 
   std::string idx(index_name);
   vdb::SearchResult result;

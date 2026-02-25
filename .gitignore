@@ -1,8 +1,10 @@
 # Build artifacts
-build/
+build*/
 build_debug/
 build_release/
 cmake-build-*/
+*log*
+.idea*
 
 # Binaries and intermediates
 *.o

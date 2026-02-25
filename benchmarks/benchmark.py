@@ -31,8 +31,13 @@ def run_cmd(cmd, cwd: Path, check=True):
     return subprocess.run(cmd, cwd=str(cwd), check=check, capture_output=True, text=True)
 
 
-def build_vdb(root: Path, build_dir: Path, build_type: str):
-    run_cmd(["cmake", "-S", str(root), "-B", str(build_dir), f"-DCMAKE_BUILD_TYPE={build_type}"], root)
+def build_vdb(root: Path, build_dir: Path, build_type: str, enable_cuda: bool, cuda_arch: str | None):
+    cmd = ["cmake", "-S", str(root), "-B", str(build_dir), f"-DCMAKE_BUILD_TYPE={build_type}"]
+    if enable_cuda:
+        cmd.append("-DVDB_ENABLE_CUDA=ON")
+        if cuda_arch:
+            cmd.append(f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}")
+    run_cmd(cmd, root)
     run_cmd(["cmake", "--build", str(build_dir), "-j"], root)
 
 
@@ -96,7 +101,8 @@ def recall_at_k(pred: np.ndarray, truth: np.ndarray, k: int) -> float:
 
 def bench_vdb(root: Path, build_dir: Path, index: str, data_bin: Path, query_bin: Path,
               nq: int, k: int, runs: int, threads: int, ivf_nlist: int,
-              ivf_nprobe: int, hnsw_m: int, hnsw_ef_search: int):
+              ivf_nprobe: int, hnsw_m: int, hnsw_ef_search: int,
+              gpu_mode: str):
     exe = build_dir / "vdb_cli"
     if not exe.exists():
         raise RuntimeError(f"vdb_cli not found: {exe}")
@@ -111,6 +117,13 @@ def bench_vdb(root: Path, build_dir: Path, index: str, data_bin: Path, query_bin
         "--repeat", str(runs),
         "--warmup", "1",
     ]
+    if gpu_mode == "auto":
+        cmd.append("--auto-gpu")
+    elif gpu_mode == "force":
+        cmd.append("--use-gpu")
+    elif gpu_mode == "cpu":
+        cmd.append("--no-gpu")
+
     if index == "ivf":
         cmd += ["--nlist", str(ivf_nlist), "--nprobe", str(ivf_nprobe)]
     elif index == "hnsw":
@@ -228,6 +241,18 @@ def main():
     ap.add_argument("--hnsw-m", type=int, default=16)
     ap.add_argument("--hnsw-ef-search", type=int, default=64)
     ap.add_argument("--output", default="benchmarks/results.json")
+    ap.add_argument("--cuda", action="store_true", help="Enable CUDA build for VDB")
+    ap.add_argument(
+        "--cuda-arch",
+        default=None,
+        help="CUDA architecture for CMake (e.g., 75, 86). If unset, CMake default is used.",
+    )
+    ap.add_argument(
+        "--gpu-mode",
+        choices=["auto", "force", "cpu"],
+        default="auto",
+        help="GPU selection mode for VDB (auto/force/cpu)",
+    )
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
@@ -245,13 +270,13 @@ def main():
 
     truth = exact_topk(xb, xq, args.k)
 
-    build_debug = root / "build_debug"
-    build_release = root / "build_release"
+    build_debug = root / ("build_debug_gpu" if args.cuda else "build_debug")
+    build_release = root / ("build_release_gpu" if args.cuda else "build_release")
 
     print("[1/4] Building Debug (no optimization)...", flush=True)
-    build_vdb(root, build_debug, "Debug")
+    build_vdb(root, build_debug, "Debug", args.cuda, args.cuda_arch)
     print("[2/4] Building Release (optimized)...", flush=True)
-    build_vdb(root, build_release, "Release")
+    build_vdb(root, build_release, "Release", args.cuda, args.cuda_arch)
 
     print("[3/4] Running VDB benchmarks...", flush=True)
     vdb_results = []
@@ -263,6 +288,7 @@ def main():
                 args.nq, args.k, args.runs, args.threads,
                 args.ivf_nlist, args.ivf_nprobe,
                 args.hnsw_m, args.hnsw_ef_search,
+                args.gpu_mode,
             )
             r["recall_at_k"] = recall_at_k(r["ids"], truth, args.k)
             r["ids"] = ids_to_list(r["ids"])
@@ -297,6 +323,12 @@ def main():
         "vdb": vdb_results,
         "faiss": faiss_results,
     }
+
+    out["config"].update({
+        "cuda": args.cuda,
+        "cuda_arch": args.cuda_arch,
+        "gpu_mode": args.gpu_mode,
+    })
 
     out_path = Path(args.output)
     if not out_path.is_absolute():
