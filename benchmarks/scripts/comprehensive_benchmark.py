@@ -42,7 +42,11 @@ def exact_topk(data, queries, k):
     for i in range(nq):
         diff  = data - queries[i]
         dists = np.einsum("nd,nd->n", diff, diff)
-        nn    = np.argpartition(dists, k)[:k]
+        kk = min(k, dists.shape[0])
+        if kk <= 0:
+            out[i] = np.array([], dtype=np.int64)
+            continue
+        nn    = np.argpartition(dists, kk - 1)[:kk]
         nn    = nn[np.argsort(dists[nn])]
         out[i] = nn
     return out.tolist()
@@ -66,6 +70,44 @@ def _index_flags(index, **kw):
         if "ef_construction" in kw: f += ["--ef-construction", str(kw["ef_construction"])]
         if "ef_search"       in kw: f += ["--ef-search",       str(kw["ef_search"])]
     return f
+
+def run_search(index, data_p, queries_p, k, threads=8, **kw):
+    """Run vdb_cli search --out csv; return pred_ids list[list[int]]."""
+    _TMP_CSV.unlink(missing_ok=True)
+    cmd = ([str(CLI), "search",
+            "--index",   index,
+            "--data",    str(data_p),
+            "--queries", str(queries_p),
+            "--k",       str(k),
+            "--threads", str(threads),
+            "--out",     str(_TMP_CSV)]
+           + _index_flags(index, **kw))
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        print(f"    [TIMEOUT] search {index} {kw}"); return []
+    except Exception as e:
+        print(f"    [ERROR]   search {e}");          return []
+    if r.returncode != 0:
+        print(f"    [WARN] search failed: {r.stderr[:200]}")
+        return []
+    if not _TMP_CSV.exists() or _TMP_CSV.stat().st_size == 0:
+        print("    [WARN] search CSV missing/empty")
+        return []
+
+    pred = {}
+    with open(_TMP_CSV) as f:
+        for row in csv.reader(f):
+            if len(row) < 3: continue
+            qi, rank, idx = int(row[0]), int(row[1]), int(row[2])
+            pred.setdefault(qi, []).append((rank, idx))
+    nq = max(pred) + 1 if pred else 0
+    ordered = []
+    for qi in range(nq):
+        items = pred.get(qi, [])
+        items.sort(key=lambda x: x[0])
+        ordered.append([idx for _, idx in items])
+    return ordered
 
 def run_bench(index, data_p, queries_p, k, threads=8, repeat=3, warmup=1,
               get_recall=False, **kw):
@@ -99,15 +141,8 @@ def run_bench(index, data_p, queries_p, k, threads=8, repeat=3, warmup=1,
         print(f"    [WARN] no METRIC lines.  stderr: {r.stderr[:200]}")
         return {}
 
-    if get_recall and _TMP_CSV.exists() and _TMP_CSV.stat().st_size > 0:
-        pred = {}
-        with open(_TMP_CSV) as f:
-            for row in csv.reader(f):
-                if len(row) < 3: continue
-                qi, _, idx = int(row[0]), int(row[1]), int(row[2])
-                pred.setdefault(qi, []).append(idx)
-        nq = max(pred) + 1 if pred else 0
-        metrics["pred_ids"] = [pred.get(qi, []) for qi in range(nq)]
+    if get_recall:
+        metrics["pred_ids"] = run_search(index, data_p, queries_p, k, threads=threads, **kw)
     return metrics
 
 # ── data cache ────────────────────────────────────────────────────────────────
@@ -120,7 +155,8 @@ def gen_data(n, d, nq=200, seed=42):
         data = rng.random((n,  d), dtype=np.float32)
         qs   = rng.random((nq, d), dtype=np.float32)
         dp   = TMP / f"data_{n}_{d}.bin"
-        qp   = TMP / f"queries_{nq}_{d}.bin"
+        # include N in query filename to avoid cross-scenario overwrite
+        qp   = TMP / f"queries_{nq}_{d}_n{n}.bin"
         write_bin(dp, data); write_bin(qp, qs)
         _cache[key] = (dp, qp, data, qs)
     return _cache[key]
