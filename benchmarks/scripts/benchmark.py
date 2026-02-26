@@ -227,7 +227,7 @@ def main():
     ap.add_argument("--ivf-nprobe", type=int, default=8)
     ap.add_argument("--hnsw-m", type=int, default=16)
     ap.add_argument("--hnsw-ef-search", type=int, default=64)
-    ap.add_argument("--output", default="benchmarks/results.json")
+    ap.add_argument("--output", default="benchmarks/results/results.json")
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
@@ -238,8 +238,9 @@ def main():
     xb = rng.random((args.n, args.dim), dtype=np.float32)
     xq = rng.random((args.nq, args.dim), dtype=np.float32)
 
-    data_bin = bench_dir / "data.bin"
-    query_bin = bench_dir / "queries.bin"
+    data_bin = bench_dir / "data" / "quick" / "data.bin"
+    query_bin = bench_dir / "data" / "quick" / "queries.bin"
+    data_bin.parent.mkdir(parents=True, exist_ok=True)
     write_bin_matrix(data_bin, xb)
     write_bin_matrix(query_bin, xq)
 
@@ -307,7 +308,9 @@ def main():
     try:
         from plot_results import plot_results  # type: ignore
 
-        plot_results(out_path, out_path.parent)
+        fig_dir = bench_dir / "figures" / "quick"
+        fig_dir.mkdir(parents=True, exist_ok=True)
+        plot_results(out_path, fig_dir)
     except Exception as e:
         print(f"Plot generation skipped: {e}")
 
